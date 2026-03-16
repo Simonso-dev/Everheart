@@ -1,0 +1,82 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECG visualization test</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='uPlot.min.css') }}">
+    <script src="{{ url_for('static', filename='uPlot.iife.min.js') }}"></script>
+</head>
+<body>
+    <h1>Hello from index.html</h1>
+    <p id="ecg-info"></p>
+    <script>
+        async function getMeanECGData() {
+            try {
+                const response = await fetch("http://127.0.0.1:5000/ecg-mean");
+                const ecgObj = await response.json();
+                // console.log(ecgObj);
+                // const ecgData = ecgObj.map(obj => Object.values(obj));
+                // console.log(ecgData);
+                const ecgTime = [];
+                const ecgData = [];
+                for(let i = 0; i < ecgObj.length; i++) {
+                    const obj = ecgObj[i];
+                    // const datetimeStr = String(obj["Time"])
+                    // console.log(datetimeStr)
+                    // const unixTimestamp = Math.floor(new Date(obj["Time"]).getTime() / 1000);
+                    const unixTimestamp = new Date(obj["Time"]).getTime();   // milliseconds
+
+                    ecgTime.push(unixTimestamp);
+                    ecgData.push(obj["240507PIG:ECG"]);
+                };
+                // console.log(ecgTime)
+                // console.log(ecgData)
+                const ecgPlotData = [ecgTime, ecgData];
+                // console.log(ecgPlotData);
+
+                return ecgPlotData;
+            }
+            catch(error) {
+                console.log(error)
+            }
+        }
+
+        async function main() {
+            const ecgPlotData = await getMeanECGData();
+            console.log(ecgPlotData);
+
+            let opts = {
+                title: "ECG mean",
+                id: "ECGchart1",
+                class: "my-ecg-chart",
+                width: 1200,
+                height: 600,
+                series: [
+                    {},
+                    {
+                    // initial toggled state (optional)
+                    show: true,
+                    
+                    spanGaps: false,
+                    
+                    // in-legend display
+                    label: "ECG",
+                    value: (self, rawValue) => rawValue == null ? '' : "$" + rawValue.toFixed(2),
+                    
+                    // series style
+                    stroke: "red",
+                    width: 1,
+                    fill: "rgba(255, 0, 0, 0.3)",
+                    dash: [10, 5],
+                    }
+                ],
+                };
+
+            let uplot = new uPlot(opts, ecgPlotData, document.body);
+
+        };
+
+        main();
+    </script>
+</body>
+</html>
