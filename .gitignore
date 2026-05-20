@@ -208,4 +208,6 @@ __marimo__/
 
 # Specific to this project
 data/
+data/parquet
 master/
+*.prof

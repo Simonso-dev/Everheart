@@ -1,238 +1,38 @@
-<html lang="en">
+<html lang="en" data-theme="light">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ECG visualization</title>
-        <script src="https://cdn.plot.ly/plotly-basic-latest.min.js"></script>
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+        <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css"> -->
+        <script src="https://cdn.plot.ly/plotly-3.4.0.min.js" charset="utf-8"></script>
     </head>
     <body>
-        <div id="chart-container"></div>
-        <div id="chart"></div>
-        <!-- <div id="chart" style="width:800px;height:400px;"></div> -->
-        <p>Arythmia colour code</p>
-        <ul>
-            <li>Sinus: none</li>
-            <li>IVR: green</li>
-            <li> Noise: blue</li>
-            <li>Other: orange</li>
-            <li>PVCs: purple</li>
-        </ul>
-        <script>
-            async function getMeanECGData() {
-                try {
-                    const response = await fetch("http://127.0.0.1:5000/ecg-mean");
-                    const ecgObj = await response.json();
-                    // console.log(ecgObj);
-                    
-                    return ecgObj;
-                }
-                catch(error) {
-                    console.log(error)
-                }
-            }
-
-            async function getPredMeanECGData() {
-                try {
-                    const response = await fetch("http://127.0.0.1:5000/ecg-predictions-split");
-                    const ecgPredObj = await response.json();
-                    
-                    return ecgPredObj;
-                }
-                catch(error) {
-                    console.log(error)
-                }
-            }
-
-            async function getECGData(start, end) {
-                try {
-                    let url;
-                    if(!start && !end) {
-                        url = "/ecg-predictions-resample"
-                    }
-                    else {
-                        url = `/ecg-predictions-resample?start=${start}&end=${end}`;
-                    }
-
-                    // console.log("URL: ", url)
-                    const response = await fetch(url);
-                    const ecgData = await response.json();
-                    // console.log("Start datetime: ", start);
-                    // console.log("End datetime: ", end);
-                    // console.log(ecgData);
-
-                    return ecgData;
-                }
-                catch(error) {
-                    console.log(error)
-                }
-            }
-
-            function renderPlot(data) {
-                const t = data.map(data => data["Time"]);
-                const y = data.map(data => Number(data["240507_complete:ECG"]));
-                const p = data.map(data => data["Prediction"]);
-
-                /*
-                    Sinus   red
-                    IVR     green
-                    Noise   blue
-                    Other   orange
-                    PVCs    purple
-                */
-                const colors = {
-                    "Sinus": "rgba(230, 25, 75, 0)",     
-                    "IVR": "rgba(60, 180, 75, 0.50)",      
-                    "Noise": "rgba(0, 130, 200, 0.50)",   
-                    "Other": "rgba(245, 130, 48, 0.50)",    
-                    "PVCs": "rgba(145, 30, 180, 0.50)"      
-                };
-
-                let shapes = [];
-                let start = null;
-                for (let i = 0; i < p.length; i++) {
-                    if (i === 0 || p[i] !== p[i - 1]) {
-                        // new segment starts
-                        start = t[i];
-                    }
-
-                    if (i === p.length - 1 || p[i] !== p[i + 1]) {
-                        // segment ends
-                        const end = t[i];
-                    
-                        shapes.push({
-                            type: "rect",
-                            xref: "x",
-                            yref: "paper",
-                            x0: start,
-                            x1: end,
-                            y0: 0,
-                            y1: 1,
-                            fillcolor: colors[p[i]] || "rgba(200,200,200,0.25)",
-                            line: {width: 0}
-                        });
-                    }
-                }
-                
-                Plotly.newPlot("chart", [{
-                    // type: "scattergl",
-                    x: t,
-                    y: y,
-                    mode: "lines",
-                    line: {color: "light-blue", width: 1}
-                }], {
-                    margin: {t: 20, r: 20, b: 40, l: 50},
-                    shapes: shapes
-                    }, {
-                    scrollZoom: true
-                });
-            }
-
-            function updatePlot(data) {
-                const t = data.map(data => data["Time"]);
-                const y = data.map(data => Number(data["240507_complete:ECG"]));
-                const p = data.map(data => data["Prediction"]);
-                // console.log("Start after update: ", t[0]);
-                // console.log("End after update: ", t[t.length - 1]);
-
-                /*
-                    Sinus   red
-                    IVR     green
-                    Noise   blue
-                    Other   orange
-                    PVCs    purple
-                */
-                const colors = {
-                    "Sinus": "rgba(230, 25, 75, 0)",     
-                    "IVR": "rgba(60, 180, 75, 0.50)",      
-                    "Noise": "rgba(0, 130, 200, 0.50)",   
-                    "Other": "rgba(245, 130, 48, 0.50)",    
-                    "PVCs": "rgba(145, 30, 180, 0.50)"      
-                };
-
-                let shapes = [];
-                let start = null;
-                for (let i = 0; i < p.length; i++) {
-                    if (i === 0 || p[i] !== p[i - 1]) {
-                        // new segment starts
-                        start = t[i];
-                    }
-
-                    if (i === p.length - 1 || p[i] !== p[i + 1]) {
-                        // segment ends
-                        const end = t[i];
-                    
-                        shapes.push({
-                            type: "rect",
-                            xref: "x",
-                            yref: "paper",
-                            x0: start,
-                            x1: end,
-                            y0: 0,
-                            y1: 1,
-                            fillcolor: colors[p[i]] || "rgba(200,200,200,0.25)",
-                            line: {width: 0}
-                        });
-                    }
-                }
-
-                Plotly.update("chart", {
-                    x: [t],
-                    y: [y],
-                }, {
-                    shapes: shapes
-                });
-            }
-
-            // In-memory cache
-            let cache = {};
-            function cacheKey(start, end) {
-                return `${start}-${end}`;
-            }
+        <div id="chart-container">
+            <div id="chart"></div>
+           <div id="list-arythmia-container">
+                <div id="search-container">
+                    <input type="text" id="search-arythmia" placeholder="Search arythmia type">
+                    <button id="search-btn">Search</button>
+                </div>
+            <div id="list-arythmia"></div>
+        </div>
+        </div>
+        <div id="row">
+            <div id="colour-arythmia" class="arythmia-card">
+                <div class="entry-header">
+                    <h3 class="entry-title">Arythmia type and number of episodes</h3>
+                </div>
             
-            async function main() {
-                // const ecgData = await getMeanECGData();
-                // const ecgPredData = await getPredMeanECGData();
-                const ecgPredData = await getECGData();
-                renderPlot(ecgPredData);
-                
-                let zoomTimer = null;
-                let loading = false;
-                document.getElementById("chart").on("plotly_relayout", (eventData) => {
-                    // Only react to x-axis zoom events
-                    const start = eventData["xaxis.range[0]"];
-                    const end = eventData["xaxis.range[1]"];
-                    // console.log("Start relayout: ", start);
-                    // console.log("End relayout: ", end);
-                    if (!start || !end) return;
-
-                    clearTimeout(zoomTimer);
-                
-                    zoomTimer = setTimeout(async () => {
-                        if (loading) return;
-                        loading = true;
-                        
-                        /*
-                        const key = cacheKey(new Date(start).toISOString(), new Date(end).toISOString());
-                        if(cache[key]) {
-                            updatePlot(cache[key]);
-                            loading = false;
-                            return;
-                        }
-                        */
-
-                        const data = await getECGData(
-                            start,
-                            end
-                        );
-                        
-                        // cache[key] = data;
-
-                        updatePlot(data);
-                        loading = false;
-                    }, 200); // debounce delay
-                });
-        }
-        main();
-    </script>
+                <ul class="arythmia-list">
+                    <li><span class="label"><span class="dot none"></span>Sinus</span> 391</li>
+                    <li><span class="label"><span class="dot green"></span>IVR</span> 206</li>
+                    <li><span class="label"><span class="dot blue"></span>Noise</span> 185</li>
+                    <li><span class="label"><span class="dot orange"></span>Other</span> 39</li>
+                    <li><span class="label"><span class="dot purple"></span>PVCs</span> 75</li>
+                </ul>
+            </div>
+        </div>
+        <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

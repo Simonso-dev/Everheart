@@ -1,11 +1,14 @@
-import csv
+import csv, time
 from datetime import datetime
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
+import threading, queue
+import lttb
+from memory_profiler import profile
 
-csv_path = "240507_pred_mean2.csv"
 
-def read_large_ecg_pred(file_path, chunk_size):
+def read_large_ecg_pred(file_path: str, chunk_size: int):
     for chunk in pd.read_csv(file_path, chunksize=chunk_size, skiprows=7, parse_dates=True, skipinitialspace=True):
         yield chunk
 
@@ -21,8 +24,18 @@ def read_ecg_csv(csv_path: str):
     
     return ecg_data
 
-def read_ecg_csv_fast(csv_path):
+def read_ecg_csv_fast(csv_path: str):
     return np.genfromtxt(csv_path, delimiter=",", names=True, dtype=None)
+
+def read_csv_df(csv_path: str):
+    return pd.read_csv(csv_path, skipinitialspace=True)
+
+def write_df_parquet(df: pd.DataFrame, file_path: str):
+    pd.DataFrame.to_parquet(path=file_path, self=df, index=False)
+
+def read_parquet(parquet_path: str):
+    return pd.read_parquet(parquet_path)
+
 
 def split_dataset_per_day(csv_path: str):
     with open(csv_path, 'r') as csv_file:
@@ -44,117 +57,51 @@ def split_dataset_per_day(csv_path: str):
 
         return ecg_data
 
-def parse_iso(timestamp): 
-    '''
-        Reformats a datetime ISO string to a python datetime string with the format "%Y-%m-%d %H:%M:%S.%f".
-    '''
-    date = datetime.fromisoformat(timestamp)
-    return date.strftime("%Y-%m-%d %H:%M:%S.%f")
+def count_arythmia_episodes(df: pd.DataFrame):
+    """
+        Counts arythmia episodes per type and returns a dictionary: { "Type": count, ... }
+    """
+    df = df.copy()
+    
+    changes = df["Prediction"].ne(df["Prediction"].shift())
+    df["Episode_ID"] = changes.cumsum()
 
-def to_json_friendly(recarray):
-    return [
-        {name: row[name].item() for name in recarray.dtype.names}
-        for row in recarray
-    ]
+    summary = df.groupby("Prediction").size()
+    ecg_stats = summary.to_dict()
+    
+    return ecg_stats
 
-def to_column_json(recarray):
-    return {
-        name: recarray[name].tolist()
-        for name in recarray.dtype.names
-    }
+def lttb3(data: pd.DataFrame, threshold: int):
+    data = data.copy()
 
-def lttb(data, threshold: int):
-    '''
-        Largest Triangle Three Buckets (LTTB)
-        
-        The LTTB algorithm as described by Sveinn Steinarsson.
-        Algorithm 4.2 Largest-Triangle-Three-Buckets
-        Require: data . The original data
-        Require: threshold . Number of data points to be returned
-        1: Split the data into equal number of buckets as the threshold but have the first
-           bucket only containing the first data point and the last bucket containing only
-           the last data point
-        2: Select the point in the first bucket
-        3: for each bucket except the first and last do
-        4: Rank every point in the bucket by calculating the area of a triangle it forms
-           with the selected point in the last bucket and the average point in the next bucket
-        5: Select the point with the highest rank within the bucket
-        6: end for
-        7: Select the point in the last bucket . There is only one
-    '''
-    data_length = len(data)
-    if threshold >= data_length or threshold == 0:
+    if len(data) <= threshold:
         return data
-    
-    sampled = []
-    bucket_size = (data_length - 2) / (threshold - 2)
 
-    a = 0
+    data["Time"] = pd.to_datetime(data["Time"]).map(pd.Timestamp.timestamp)
+    pred = data["Prediction"]
+    data = data.drop("Prediction", axis=1)
 
-    sampled.append(data[0])
+    sampeld = lttb.downsample(data.to_numpy(), threshold)
 
-    for i in range(1, threshold - 1):
-        # The current bucket
-        start = int((i - 1) * bucket_size) + 1
-        end = int(i * bucket_size) + 1
+    sampeld_df = pd.DataFrame(sampeld, columns=["Time", "240507_complete:ECG"])
+    sampeld_df["Time"] = pd.to_datetime(sampeld_df["Time"], unit="s").dt.strftime("%Y-%m-%d %H:%M:%S.%f")
 
-        if end >= data_length:
-            end = data_length - 1
-        
-        # Calculate the next bucket average.
-        next_start = int(i * bucket_size) + 1
-        next_end = int((i + 1) * bucket_size) + 1
-        
-        if next_end > data_length:
-            next_end = data_length
+    data["Time"] = pd.to_datetime(data["Time"], unit="s").dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+    data["Prediction"] = pred
 
-        count = next_end - next_start
-        avg_x = 0.0
-        avg_y = 0.0
-        for j in range(next_start, next_end):
-            x, y = datetime.strptime(data[j]["Time"], "%Y-%m-%d %H:%M:%S.%f").timestamp(), float(data[j]["240507_complete:ECG"])
-            avg_x += x
-            avg_y += y
-        
-        avg_x /= count
-        avg_y /= count
+    sampeld_df["Prediction"] = sampeld_df["Time"].map(data.set_index("Time")["Prediction"])
 
-        # Point A
-        ax, ay = datetime.strptime(data[a]["Time"], "%Y-%m-%d %H:%M:%S.%f").timestamp(), float(data[a]["240507_complete:ECG"])
+    return sampeld_df
 
-        # Find the max area point in the current bucket.
-        max_area = -1
-        max_point = None
-        max_index = None
-
-        for j in range(start, end):
-            bx, by = datetime.strptime(data[j]["Time"], "%Y-%m-%d %H:%M:%S.%f").timestamp(), float(data[j]["240507_complete:ECG"])
-
-            area = abs(
-                (ax - avg_x) * (by - ay) -
-                (ax - bx) * (avg_y - ay)
-            )
-
-            if area > max_area:
-                max_area = area
-                max_point = data[j]
-                max_index = j
-        
-        sampled.append(max_point)
-        a = max_index
-    
-    sampled.append(data[-1])
-    return sampled
-
-def binarySearch(sorted_list, key):
+def binarySearch(sorted_list: pd.DataFrame, key):
     first = 0
     last = (len(sorted_list) - 1)
 
     while first <= last:
         mid = (first + last) // 2
-
-        mid_date = datetime.strptime(sorted_list[mid][0], "%Y-%m-%d %H:%M:%S.%f")
         
+        mid_date = datetime.strptime(sorted_list.iloc[mid]["Time"], "%Y-%m-%d %H:%M:%S.%f")
+
         if mid_date < key:
             first = mid + 1
         else:
@@ -163,24 +110,176 @@ def binarySearch(sorted_list, key):
     # print("Key not found, returning None")
     return first
 
+# @profile
+def test_get_ecg_pred_resample(start=None, end=None, datasets=None):
+    '''
+        This function is for benchmarking purposes only.
+    '''
+
+    ecg_csv_1hz = datasets[0]
+    ecg_csv_20hz = datasets[1]
+    ecg_csv_100hz = datasets[2]
+
+    if not start or not end:
+        sampeld_start = lttb3(ecg_csv_1hz, 5000)
+        return sampeld_start.to_json(orient="records")
+    '''
+    print("--------------------------------------")
+    print("Received start:", start)
+    print("Received end:", end)
+    print("--------------------------------------")
+    '''
+    
+    start_date = datetime.strptime(start, "%Y-%m-%d %H:%M:%S.%f")
+    # print(f"Start date: {start_date}")
+    end_date = datetime.strptime(end, "%Y-%m-%d %H:%M:%S.%f")
+    # print(f"End date: {end_date}")
+    # print("--------------------------------------")
+    
+    span = (end_date - start_date).total_seconds()
+    # print(f"Span: {span}")
+
+    # If the span is greater than 6 hours use the 1hz downsample,
+    # then if the span is between 1 and 6 hours use 10hz downsample.
+    # For every span less than an hour use the raw file.
+    if span > 6 * 3600:
+        # print("Swapped to 1hz")
+        ecg_pred = ecg_csv_1hz
+    elif span > 300:
+        # print("Swapped to 20hz")
+        ecg_pred = ecg_csv_20hz
+    else:
+        # print("Swapped to 50hz")
+        ecg_pred = ecg_csv_100hz
+    
+    start_time = time.time()
+    start_index = binarySearch(ecg_pred, start_date)
+    # print(f"Start index: {start_index}")
+    end_time = time.time()
+    # print(f"Binary search took: {end_time - start_time:.6f} seconds")
+    end_index = binarySearch(ecg_pred, end_date)
+    # print(f"End index: {end_index}")
+
+    if start_index is not None and end_index is not None:
+        ecg_data = ecg_pred.iloc[start_index:end_index + 1]
+    else:
+        ecg_data = ecg_pred.copy()
+
+    # print(f"Data lenght: {len(ecg_data)}")
+    # print("--------------------------------------")
+
+    # ecg_data = lttb(to_json_friendly(ecg_data), 10000)
+    # print(f"Data lenght after lttb: {len(ecg_data)}")
+
+    if len(ecg_data) > 5000:
+        sampeld = lttb3(ecg_data, 5000)
+        return sampeld.to_json(orient="records")
+    
+    return ecg_data.to_json(orient="records")
+
+def get_ecg_resample(start: str, end: str, parquet_files: tuple):
+    ecg_1hz = parquet_files[0]
+    ecg_20hz = parquet_files[1]
+    ecg_100hz = parquet_files[2]
+    
+    if not start or not end:
+        sampeld_start = lttb3(ecg_1hz, 5000)
+        return sampeld_start.to_json(orient="records")
+    
+    print("-"*30)
+    print("Received start:", start)
+    print("Received end:", end)
+    print("-"*30)
+    
+    start_date = datetime.strptime(start, "%Y-%m-%d %H:%M:%S.%f")
+    print(f"Start date: {start_date}")
+    end_date = datetime.strptime(end, "%Y-%m-%d %H:%M:%S.%f")
+    print(f"End date: {end_date}")
+    print("-"*30)
+    
+    span = (end_date - start_date).total_seconds()
+    print(f"Span: {span}")
+
+    # If the span is greater than 6 hours use the 1hz downsample,
+    # then if the span is between 1 and 6 hours use 10hz downsample.
+    # For every span less than an hour use the raw file.
+    if span > 6 * 3600:
+        print("Swapped to 1hz")
+        ecg_pred = ecg_1hz
+    elif span > 300:
+        print("Swapped to 20hz")
+        ecg_pred = ecg_20hz
+    else:
+        print("Swapped to 50hz")
+        ecg_pred = ecg_100hz
+    
+    start_time = time.time()
+    start_index = binarySearch(ecg_pred, start_date)
+    print(f"Start index: {start_index}")
+    end_time = time.time()
+    print(f"Binary search took: {end_time - start_time:.6f} seconds")
+    end_index = binarySearch(ecg_pred, end_date)
+    print(f"End index: {end_index}")
+
+    if start_index is not None and end_index is not None:
+        ecg_data = ecg_pred.iloc[start_index:end_index + 1]
+    else:
+        ecg_data = ecg_pred.copy()
+
+    print(f"Data lenght: {len(ecg_data)}")
+    print("-"*30)
+
+    if len(ecg_data) > 5000:
+        sampeld = lttb3(ecg_data, 5000)
+        return sampeld.to_json(orient="records")
+
+    return ecg_data.to_json(orient="records")
+
+def stream_parquet(parquet_path: str , start, end):
+    parquet_file = pq.ParquetFile(parquet_path)
+    start_index = 0
+    end_index = 0
+    sampled = pd.DataFrame
+
+    for batch in parquet_file.iter_batches():
+        df = batch.to_pandas()
+
+def read_multiple_files(parquet_paths: tuple):
+    '''
+        This function reads multiple parquet files and puts them in a queue using threads.
+
+        It works by defining a temporary worker function that puts the result of a thread in queue.
+        The queue is then returned when all threads are done.
+    '''
+    threads = []
+    parquet_files = queue.Queue()
+
+    def read_parquet_worker(parquet_path):
+        df = read_parquet(parquet_path)
+        parquet_files.put(df)
+
+    for parquet_path in parquet_paths:
+        thread = threading.Thread(target=read_parquet_worker, args=(parquet_path,))
+        threads.append(thread)
+        thread.start()
+    
+    for thread in threads:
+        thread.join()
+    
+    return parquet_files
+
 if __name__ == "__main__":
-    # Generate example data
-    N = 5000  # number of points
-
-    # X values: evenly spaced timestamps
-    x = np.linspace(0, 100, N)
-
-    # Y values: noisy signal with multiple frequencies
-    y = (
-        np.sin(x * 0.2) * 10 +
-        np.sin(x * 1.5) * 2 +
-        np.random.normal(scale=1.0, size=N)
-    )
-
-    # Combine into a 2D array if needed
-    data = np.column_stack((x, y))
-
-    ecg_data = read_ecg_csv(csv_path)
     # print(ecg_data)
-    ecg_sample = lttb(ecg_data, 10)
-    print(ecg_sample)
+    # ecg_sample = lttb2(ecg_data, 10)
+    # print(ecg_sample)
+    
+    # csv_path = "data/240507_pred_1hz.csv"
+    # ecg_data = read_csv_df2(csv_path)
+    # print(binarySearch(ecg_data, "2024-05-08 08:51:17.594"))
+    
+    # sampeld = lttb3(ecg_data, 10000)
+    # print(sampeld)
+
+    df = read_csv_df("data/240507_pred_20hz.csv")
+    write_df_parquet(df, "240507_20hz.parquet")
+    # print(read_parquet("240507_50hz.parquet"))
