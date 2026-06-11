@@ -17,7 +17,10 @@ def stream_csv_chunks(filename: str, chunk_size: int):
             if row[1] in ("", "NA", "N/A", "null", "nan", "x", "X"):
                 row[1] = "0.0"
             
-            chunk.append({headers[0]: row[0], headers[1]: row[1], headers[2]: row[2]})
+            entry = {headers[0]: row[0], headers[1]: row[1]}
+            if len(headers) > 2 and len(row) > 2:
+                entry[headers[2]] = row[2]
+            chunk.append(entry)
 
             if len(chunk) >= chunk_size:
                 yield chunk
@@ -38,31 +41,36 @@ def every(data, factor: int):
     
     return reduced
 
-def uniform_downsample(csv_path:str, factor: int):
+def uniform_downsample(csv_path: str, factor: int, output_path: str):
     sampled= []
     batch_count = 0
     for batch in stream_csv_chunks(csv_path, 10_000_000):
-        # sampled_ecg = lttb(batch, 2500000)
         sampled_ecg = every(batch, factor)
         sampled.extend(sampled_ecg)
         batch_count += 1
         print(f"Batch {batch_count} done! This processing took {(time.time() - start_time) / 60} minutes.", end="\n")
 
-        # if batch_count == 1:
-        #    break
-
-    # reduced2 = lttb(sampled, 10000)
-    # final = lttb(reduced2, 5000)
-
     print(len(sampled))
-    keys = sampled[0].keys()
-    with open("./data/240507_pred_100hz.csv", "w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, keys)
-        writer.writeheader()
-        writer.writerows(sampled)
+    pd.DataFrame(sampled).to_parquet(output_path, index=False)
 
 if __name__ == "__main__":
+    import argparse
+    import os
+    parser = argparse.ArgumentParser()
+    parser.add_argument("ascii_file", help="Path to the input ASCII file")
+    parser.add_argument("--factor", type=int, default=10, help="Downsampling factor (default: 10)")
+    parser.add_argument("--input-freq", type=int, required=True, help="Original sample frequency in Hz (e.g. 1000)")
+    parser.add_argument("--output", help="Output path (default: <input_name>_<output_freq>hz.parquet)")
+    args = parser.parse_args()
+
+    output_freq = args.input_freq // args.factor
+    if args.output:
+        output_path = args.output
+    else:
+        base = os.path.splitext(args.ascii_file)[0]
+        output_path = f"{base}_{output_freq}hz.parquet"
+
     start_time = time.time()
-    uniform_downsample("./data/raw/240507_complete_predictions.ascii", 10)
+    uniform_downsample(args.ascii_file, args.factor, output_path)
     print("-"*40)
     print(f"Done! This processing took {(time.time() - start_time) / 60} minutes.", end="\n")
