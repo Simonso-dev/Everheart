@@ -29,7 +29,7 @@ TESTS = 100
 #
 # Load data (new version)
 #
-parquet_paths = ("data/parquet/240507_1hz.parquet", "data/parquet/240507_20hz.parquet", "data/parquet/240507_100hz.parquet")
+parquet_paths = ("data/240220PIG_complete_1hz.parquet", "data/240220PIG_complete_10hz.parquet", "data/240220PIG_complete_100hz.parquet")
 
 start_time = time.time()
 parquet_files = read_multiple_files(parquet_paths)

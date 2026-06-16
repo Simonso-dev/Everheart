@@ -211,3 +211,6 @@ data/
 data/parquet
 master/
 *.prof
+
+# venv
+everheart-venv/
